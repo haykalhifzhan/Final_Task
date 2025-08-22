@@ -1,7 +1,7 @@
 # Web IDOR Testing Framework 🔒
 
 ## Deskripsi Proyek
-Framework ini dikembangkan sebagai **tugas akhir** untuk mata kuliah/pelatihan keamanan aplikasi web, dengan fokus pada pengujian **akses kontrol** dan **logika bisnis**, termasuk deteksi **Insecure Direct Object References (IDOR)**.  
+Framework ini dikembangkan sebagai **tugas akhir** Bootcamp Noctra Lupra, dengan fokus pada pengujian **akses kontrol** dan **logika bisnis**, termasuk deteksi **Insecure Direct Object References (IDOR)**.  
 
 Dengan tool ini, kamu bisa secara otomatis:  
 - Login ke aplikasi web menggunakan **email/password** atau **username/password**  
