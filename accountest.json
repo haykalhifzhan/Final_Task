@@ -1,0 +1,5 @@
+ACCOUNTS = {
+    "user": {"email": "user@example.com", "password": "UserPass456!"},
+    "guest": {"email": "guest@example.com", "password": "GuestPass789!"},
+    "admin": {"email": "admin@example.com", "password": "AdminPass123!"}
+}
