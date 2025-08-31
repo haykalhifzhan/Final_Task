@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """
-WALF (Web Access Logic Framework)
-Advanced IDOR & Privilege Escalation Testing with HTML Report
-
-Perbaikan utama:
-- Verifikasi autentikasi nyata (cek halaman-protected seperti /dashboard)
-- Debug login: simpan Set-Cookie / session.cookies untuk inspeksi
-- Fallback mencoba POST JSON jika form POST gagal
-- Menjaga logs terstruktur saat finalisasi
+WALF (Web Access Logic Framework) - revised full script
+Features:
+ - Login detection + improved login verification (requests session)
+ - Keep detection responses (authenticated) but PoC uses SESS_FAKE placeholder
+ - Structured logs, dedupe, enrichment, redaction, CSV/JSON/HTML export
+ - Heuristic severity/score/confidence
 """
 import os
 import csv
@@ -145,7 +143,10 @@ def normalise_url(u):
     return urlunparse((p.scheme, p.netloc, p.path, "", p.query, ""))
 
 def same_domain(a, b):
-    return urlparse(a).netloc == urlparse(b).netloc
+    try:
+        return urlparse(a).netloc == urlparse(b).netloc
+    except Exception:
+        return False
 
 def safe_get(session, url, **kwargs):
     try:
@@ -248,7 +249,7 @@ def verify_session_auth(session, base_url, output_logs, check_paths=None):
         r = safe_get(session, url, headers=HEADERS)
         sig = response_sig(r)
         last_sig = sig
-        output_logs.append({"ts": time.time(), "level": "debug", "msg": f"verify GET {url} -> status={sig.get('status')} len={sig.get('len')}"})
+        output_logs.append({"ts": time.time(), "level": "debug", "msg": f"verify GET {url} -> status={sig.get('status')} len={sig.get('len')}"} )
         body = (sig.get("sample") or "").lower()
         for ind in indicators:
             if ind in body:
@@ -816,7 +817,7 @@ def render_html_report(final_data, filename):
         html_parts.append('<div class="muted">No findings recorded.</div>')
     html_parts.append('</div>')
 
-    # detailed findings (with redacted sample)
+    # detailed findings (with redacted sample and authenticated detection sample if present)
     html_parts.append('<div class="card"><h2 class="scenario-title">Findings — Details</h2>')
     if findings:
         for f in findings:
@@ -824,11 +825,18 @@ def render_html_report(final_data, filename):
             html_parts.append(f'<div style="margin-bottom:12px;"><strong>{header}</strong>')
             meta_line = f"ID: {html.escape(f.get('id','-'))} • Severity: {html.escape(str(f.get('severity','-')))} • Confidence: {html.escape(str(f.get('confidence','-')))}"
             html_parts.append(f'<div class="small">{meta_line}</div>')
-            html_parts.append('<div class="small" style="margin-top:6px;"><strong>PoC / Repro:</strong></div>')
+            # PoC & repro
+            html_parts.append('<div class="small" style="margin-top:6px;"><strong>PoC / Repro (replace session cookie placeholder with a real session):</strong></div>')
             html_parts.append(f'<div class="mono">{html.escape(f.get("poc_curl",""))}</div>')
-            resp = f.get("response",{}) or {}
-            sample = html.escape(resp.get("sample_redacted", resp.get("sample","")[:1000]))
-            html_parts.append('<details><summary class="small">View redacted response sample</summary>')
+            # detection (authenticated) sample if we captured one
+            det = f.get("response",{}) or {}
+            det_sample = f.get("detection_sample")
+            if det_sample:
+                html_parts.append('<div class="small" style="margin-top:6px;"><strong>Detection response (authenticated)</strong></div>')
+                html_parts.append(f'<details><summary class="small">View detection sample</summary><div class="mono">{html.escape(det_sample[:4000])}</div></details>')
+            # redacted response sample (from response)
+            sample = html.escape(det.get("sample_redacted", det.get("sample","")[:1000]))
+            html_parts.append('<details><summary class="small">View redacted response sample (from recorded response)</summary>')
             html_parts.append(f'<div class="mono">{sample}</div></details>')
             if f.get("notes"):
                 html_parts.append(f'<div class="small" style="margin-top:6px;"><strong>Notes:</strong> {html.escape(f.get("notes"))}</div>')
@@ -912,8 +920,11 @@ def finalize_and_export(output, report_base_name):
         ff["estimated_fix_days"] = ff.get("estimated_fix_days", 1)
         ff["poc_curl"] = ff.get("poc_curl") or build_poc_curl(ff)
         ff["repro_steps"] = ff.get("repro_steps", ["See PoC curl above (replace session cookie)"])
+        # keep detection_sample (full, unredacted) if present in original response (for authenticated evidence)
         if "response" in ff:
+            # store redacted sample for HTML, keep raw sample in separate field only if explicit
             ff["response"]["sample_redacted"] = redact_text(ff["response"].get("sample",""))
+            ff["detection_sample"] = ff["response"].get("sample","")
         if not ff.get("title"):
             ff["title"] = str(ff.get("scenario") or "Finding")
         enriched.append(ff)
@@ -1003,12 +1014,12 @@ def main():
             for a in info["auth_candidates"]:
                 if a not in output["auth_type_candidates"]:
                     output["auth_type_candidates"].append(a)
-            output["logs"].append(f"[detect] inspected {url} -> auth candidates {info['auth_candidates']}; csrf_keys={list(info['csrf'].keys())}")
+            output["logs"].append({"ts": time.time(), "level": "debug", "msg": f"[detect] inspected {url} -> auth candidates {info['auth_candidates']}; csrf_keys={list(info['csrf'].keys())}"})
     except Exception as e:
         output["errors"].append(f"Error detecting login: {e}")
-        output["logs"].append(str(e))
+        output["logs"].append({"ts": time.time(), "level": "error", "msg": str(e)})
 
-    # 2) choose auth mode (same as before)
+    # 2) choose auth mode
     chosen_mode=None
     if output["auth_type_candidates"]:
         print("\nDetected authentication candidate types:", output["auth_type_candidates"])
@@ -1039,7 +1050,7 @@ def main():
         for m in modes:
             ans = input(f"\nMasukkan credential untuk metode '{m}'? (y/n): ").strip().lower()
             if ans != "y":
-                output["logs"].append(f"user skipped credentials for {m}")
+                output["logs"].append({"ts": time.time(), "level":"info", "msg": f"user skipped credentials for {m}"})
                 continue
             if m=="email":
                 user = input("  Email: ").strip()
@@ -1047,7 +1058,7 @@ def main():
                 user = input("  Username: ").strip()
             pwd = input("  Password: ").strip()
             login_url = output["login_detected_paths"][0] if output["login_detected_paths"] else urljoin(target, "/login")
-            output["logs"].append(f"[login] attempting {m} -> {login_url} (credentials not saved to disk)")
+            output["logs"].append({"ts": time.time(), "level":"info", "msg": f"[login] attempting {m} -> {login_url} (credentials not saved to disk)"})
             page = safe_get(session, login_url, headers=HEADERS)
             time.sleep(THROTTLE)
             form_info = {}
@@ -1110,7 +1121,7 @@ def main():
                     pass
 
             output["findings"].append({"action":"login_attempt","method":m,"url":action_post,"success":bool(verified),"response":sig})
-            output["logs"].append(f"[login] POST {action_post} -> status {sig.get('status')} ; heuristic_ok={heuristic_ok} ; verified={verified}")
+            output["logs"].append({"ts": time.time(), "level":"info", "msg": f"[login] POST {action_post} -> status {sig.get('status')} ; heuristic_ok={heuristic_ok} ; verified={verified}"})
 
             if verified:
                 print(f"[+] Login berhasil sebagai {user} (verified)")
@@ -1121,9 +1132,9 @@ def main():
                 break
             else:
                 print(f"[-] Login gagal / tidak terverifikasi untuk mode {m} (cek logs).")
-                output["logs"].append(f"login attempt failed / not verified for {m}")
+                output["logs"].append({"ts": time.time(), "level":"warning", "msg": f"login attempt failed / not verified for {m}"})
     else:
-        output["logs"].append("No credentials provided / chosen. Proceeding as guest.")
+        output["logs"].append({"ts": time.time(), "level":"info", "msg": "No credentials provided / chosen. Proceeding as guest."})
 
     # 4) Crawl
     print("\n[+] Crawling halaman untuk menemukan link/form...")
@@ -1204,7 +1215,7 @@ def main():
         scen2 = run_sequential_query(session, query_candidate, qparam, numeric_ids, output["logs"])
         output["findings"].extend(scen2)
     else:
-        output["logs"].append("No query param candidate for sequential query tests.")
+        output["logs"].append({"ts": time.time(), "level":"debug", "msg": "No query param candidate for sequential query tests."})
 
     scen3=[]
     for f in forms:
@@ -1226,7 +1237,7 @@ def main():
         scen_l3 = run_level3_advanced_tests(session, target, output["found_ids"], output["logs"])
         output["findings"].extend(scen_l3)
     except Exception as e:
-        output["logs"].append(f"[l3] orchestrator error: {e}")
+        output["logs"].append({"ts": time.time(), "level":"error", "msg": f"[l3] orchestrator error: {e}"})
 
     # ensure response fields exist
     for f in output["findings"]:
