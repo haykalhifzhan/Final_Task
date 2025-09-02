@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # WALF - single-file revised version (interactive)
-# Fokus: perbaikan runtime, safety (mask cookies), robust response parsing
+# Fokus: perbaikan runtime, safety (mask cookies), robust response parsing|
 
 import os
 import csv
